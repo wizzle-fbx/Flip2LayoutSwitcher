@@ -4,7 +4,7 @@ Automatic Retro / Xbox controller layout per game on the **Retroid Pocket Flip 2
 
 Pick Retro or Xbox for a game once. When you open it (from any launcher), the layout switches by itself; when you leave, your normal setting comes back. No root.
 
-**Beta.** Flip 2 only, tested on the firmware with build number ending in `20250501`. On other firmware the app does not change anything.
+Flip 2 only, tested on the firmware with build number ending in `20250501`. On other firmware the app does not change anything.
 
 ## Install
 

@@ -21,4 +21,4 @@ Revised after device feedback (14 October 2026): the app is set up once and then
 - Settings: setup status, the update check (on by default, *Check now*), About, open-source licenses and technical diagnostics. No manual mode, resume-after-restart or connection controls.
 - English-only UI (Retroid's own menus are not translated either); installed app names remain their own labels. Setup order: whitelist, Shizuku, accessibility.
 
-This revision is a beta. General public release still requires independent user setup tests and firmware compatibility evidence.
+Compatibility with other firmware still needs independent user tests.
