@@ -137,8 +137,22 @@ was installed from the Files app and set up only through its own Setup screen:
 
 Checks GitHub Releases (`updateRepo` in `gradle.properties`), downloads the APK, verifies package name and a higher
 `versionCode`, and installs through a `PackageInstaller` session (system confirmation). Version comparison and release
-selection are unit-tested; the download/install path has not run yet because no repository or signed release exists.
-Test it with the first two signed releases before announcing updates.
+selection are unit-tested.
+
+Verified end to end on 2026-10-14 with the first two public pre-releases (`v0.3.0-beta`, `v0.3.1-beta`, both signed
+with certificate SHA-256 `11082b7a…78002c`). The signed 0.3.0-beta release build (versionCode 30030) opened, found
+v0.3.1-beta through the unauthenticated API, and showed the dialog with the release notes. *Update* downloaded the APK
+and handed it to the installer. Android 13 first asked to allow installing unknown apps from Flip2 Layout Switcher
+(Settings → allow), then showed its update confirmation. After confirming, 0.3.1-beta (versionCode 30130, installer
+`app.flip2layout.switcher`) was installed. Diagnostics, all within one second: *Update installed*, *App detection
+service connected*, *Shizuku shell ready*. Settings showed *Automatic switching is ready* without reopening Setup.
+
+- A private repository returns 404 to the unauthenticated check (logged as *Update check failed: GitHub returned 404*);
+  a failed check does not start the 6-hour throttle.
+- After publishing, GitHub's release *list* endpoint may serve a cached response for about a minute. An app opened in
+  that window records "no update" and waits 6 hours (*Check now* skips the wait).
+- `uiautomator dump` (used in tests) makes Android rebind accessibility services. While that happens Setup can briefly
+  report app detection as off; this is a test side effect, not caused by the update.
 
 ## Not yet verified
 
