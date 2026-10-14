@@ -38,11 +38,7 @@ class ControllerAccess(private val app: ProfilesApplication) {
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName, service: IBinder) {
             binding = false; remote = IControllerShell.Stub.asInterface(service)
-            scope.launch {
-                val read = withContext(Dispatchers.IO) { runCatching { remote?.readState() }.getOrNull() }
-                _ready.value = read != null && !read.startsWith("ERR:") && (parseMode(read) != null || repairable(read))
-                app.report(if (_ready.value) "Shizuku shell ready. Controller: ${_current.value?.label ?: "unknown"}" else "Control unavailable: $read")
-            }
+            probe()
         }
         override fun onServiceDisconnected(name: ComponentName) {
             binding = false; remote = null; _ready.value = false
@@ -96,8 +92,24 @@ class ControllerAccess(private val app: ProfilesApplication) {
             else Shizuku.requestPermission(7)
         }.onFailure { app.report(it.message ?: "Shizuku unavailable") }
     }
+    private var probing = false
+    /** Reads the controller settings through the bound shell; repeated whenever control is bound but not ready. */
+    private fun probe() {
+        if (probing) return
+        probing = true
+        scope.launch {
+            try {
+                val read = withContext(Dispatchers.IO) { runCatching { remote?.readState() }.getOrNull() }
+                val ok = read != null && !read.startsWith("ERR:") && (parseMode(read) != null || repairable(read))
+                if (ok != _ready.value || !ok) app.report(if (ok) "Shizuku shell ready. Controller: ${_current.value?.label ?: "unknown"}" else "Control unavailable: $read")
+                _ready.value = ok
+            } finally { probing = false }
+        }
+    }
     fun connectIfAllowed() {
         runCatching {
+            // Bound but not ready (e.g. controller was disabled, or the first read timed out): read again.
+            if (remote != null && !_ready.value) { probe(); return }
             if (!supported || binding || remote != null || !Shizuku.pingBinder()) return
             if (Shizuku.getUid() != 2000 || Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) return
             binding = true
@@ -124,7 +136,11 @@ class ControllerAccess(private val app: ProfilesApplication) {
             check(allowed()) { "Switch cancelled." }
             _transitioning.value = true
             lastWriteAt = SystemClock.elapsedRealtime()
-            val result = withContext(Dispatchers.IO) { shell.setMode(mode.ordinal) }
+            // If the shell dies mid-write or cannot roll back, settings may already have changed: treat as written
+            // so a late reconnect is not mistaken for the user's own mode change.
+            val result = try { withContext(Dispatchers.IO) { shell.setMode(mode.ordinal) } }
+                catch (e: android.os.RemoteException) { written = true; throw e }
+            if (result.contains("rollback failed", ignoreCase = true)) written = true
             check(result == "OK") { result }
             written = true
             // Bounded transition check only; there is no periodic background polling.

@@ -78,8 +78,8 @@ Mitigations in 0.2.0-beta:
   tile could still be cleared) and made returning from Play/Settings during setup awkward; `onUserLeaveHint` is not
   called for the Recents gesture and `onStop` does not run before *Clear all*. The vendor whitelist is the fix.
 - Package updates (`adb install -r`) were checked repeatedly: the service stays enabled each time.
-- The automation switch shows the effective state (saved preference **and** Shizuku ready **and** detector bound);
-  it can no longer appear on while the service is disconnected.
+- There is no automation switch any more: the setup banner and Settings status show whether automation can actually run
+  (Shizuku ready, detector bound, whitelist), so it can never look active while the service is disconnected.
 - The setup screen explains that force-stopping turns the accessibility permission off.
 - The diagnostic event log survives process restarts.
 
@@ -115,6 +115,24 @@ was installed from the Files app and set up only through its own Setup screen:
 - Cancelled switches no longer show the error banner; a failed session write returns an error instead of crashing.
 - Quick successive Retro/Xbox taps update the draft atomically.
 
+## Final audit (correctness, security, UI/docs)
+
+- Control no longer stays "not ready" forever after one failed settings read: the bound shell is probed again on
+  resume, when Shizuku reconnects and from *Try again*.
+- Returning to a game after its switch was cancelled (another package in front, screen off, keyguard) switches it
+  again; the app in front is tracked even while control is unavailable and applied once control becomes ready.
+- A shell that dies mid-write or cannot roll back counts as "written", so a late reconnect is not taken as the
+  user's own mode change.
+- Updater: download URL must be `https://github.com/...`, APK capped at 50 MB and API response at 512 KB, a failed
+  install session is abandoned, and a found update survives process restarts.
+- `versionCode` is derived from `appVersion`, so the updater's name comparison and Android's code check agree.
+- Release builds do not write diagnostics to logcat; cloud backup and device-to-device transfer are excluded.
+- Open-source licenses (MIT for Shizuku API, Apache-2.0 for AndroidX/Compose/Kotlin) are shown in the app.
+- Gradle distribution checksum is pinned.
+- UI: one status priority for banner and Settings, a dismissible switch-error banner, a single result message for
+  *Check now*, Back returns to where Setup was opened, the button tester stops itself, screen-reader labels for
+  Retro/Xbox buttons and switches, scrollable plain-text release notes.
+
 ## In-app updates
 
 Checks GitHub Releases (`updateRepo` in `gradle.properties`), downloads the APK, verifies package name and a higher
@@ -124,12 +142,12 @@ Test it with the first two signed releases before announcing updates.
 
 ## Not yet verified
 
-- Return to the home launcher, notification shade and keyboard during a profiled game.
-- Rapid app switching, screen lock/unlock, reboot with *resume after restart*.
+- Notification shade and keyboard during a profiled game (return to the home launcher is verified above).
+- Rapid app switching, screen lock/unlock, and reboot (Shizuku must be started again).
 - Other titles: Albion Online, Azahar, GameHub. Whether each game accepts the controller reconnect without restarting.
 - A/B/X/Y keycodes inside a game after each automatic switch.
 - Behavior on other firmware builds (the app refuses to switch on any unverified fingerprint).
-- Independent setup by another user from a clean install.
+- Independent setup by another user (a clean install was tested by the maintainer; see above).
 
 ## Sources
 

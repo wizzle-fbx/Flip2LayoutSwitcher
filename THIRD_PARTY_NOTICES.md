@@ -4,10 +4,11 @@ Flip2 Layout Switcher uses the following open-source libraries. Versioned depend
 
 | Component | License | Source |
 | --- | --- | --- |
-| Shizuku API/provider 13.1.5 | MIT, copyright Rikka | https://github.com/RikkaApps/Shizuku-API |
+| Shizuku API/provider 13.1.5 | MIT, copyright (c) 2021 RikkaW | https://github.com/RikkaApps/Shizuku-API |
 | AndroidX / Jetpack Compose / Material icons | Apache-2.0 | https://android.googlesource.com/platform/frameworks/support/ |
 | Kotlin / kotlinx.coroutines | Apache-2.0 | https://github.com/JetBrains/kotlin and https://github.com/Kotlin/kotlinx.coroutines |
 | JUnit (test only) | EPL-1.0 | https://github.com/junit-team/junit4 |
+| org.json (test only) | Public domain | https://github.com/stleary/JSON-java |
 
 ## Shizuku API license
 

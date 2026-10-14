@@ -20,7 +20,9 @@ class ForegroundService : AccessibilityService() {
     /** Last real app activity in front; re-evaluated when profiles change (e.g. saved while leaving this app). */
     private var foreground: String? = null
     private val screen = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) { cancelPending("Screen off; pending switch cancelled."); latest = null; foreground = null }
+        override fun onReceive(context: Context, intent: Intent) {
+            cancelPending("Screen off; pending switch cancelled."); planner.reset(); latest = null; foreground = null
+        }
     }
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -34,6 +36,12 @@ class ForegroundService : AccessibilityService() {
                 foreground?.let { if (app.controller.ready.value && !getSystemService(KeyguardManager::class.java).isKeyguardLocked) evaluate(it) }
             }
         }
+        scope.launch {
+            // When control becomes ready (Shizuku started or reconnected), apply the profile of the app in front.
+            app.controller.ready.collect { ready ->
+                if (ready) foreground?.let { if (!getSystemService(KeyguardManager::class.java).isKeyguardLocked) evaluate(it) }
+            }
+        }
         app.report("App detection service connected.")
     }
     private var notReadyReported: String? = null
@@ -45,14 +53,6 @@ class ForegroundService : AccessibilityService() {
         if (event?.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
         val prefs = app.store.state.value
         val pkg = event.packageName?.toString() ?: return
-        if (!app.controller.ready.value) {
-            if (pkg in prefs.profiles && notReadyReported != pkg) {
-                notReadyReported = pkg; app.report("$pkg: controller control not ready; switch skipped.")
-            }
-            cancelPending(); return
-        }
-        notReadyReported = null
-        if (getSystemService(KeyguardManager::class.java).isKeyguardLocked) { cancelPending("Screen locked; pending switch cancelled."); return }
         val ime = Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)?.substringBefore('/')
         val ignored = pkg == "android" || pkg == "com.android.systemui" ||
             pkg == "com.rp.gameassistant" || pkg == ime || pkg.contains("permissioncontroller")
@@ -62,7 +62,18 @@ class ForegroundService : AccessibilityService() {
         }.isSuccess else false
         // Overlays, dialogs, the shade and the keyboard sit on top of the same app: keep any pending switch.
         if (ignored || !activity) return
+        // Track the real app in front even while control is unavailable, so it is applied once control is ready.
         foreground = pkg
+        if (!app.controller.ready.value) {
+            if (pkg in prefs.profiles && notReadyReported != pkg) {
+                notReadyReported = pkg; app.report("$pkg: controller control not ready; switch skipped.")
+            }
+            cancelPending(); return
+        }
+        notReadyReported = null
+        if (getSystemService(KeyguardManager::class.java).isKeyguardLocked) {
+            cancelPending("Screen locked; pending switch cancelled."); planner.reset(); return
+        }
         evaluate(pkg)
     }
     private fun evaluate(pkg: String) {

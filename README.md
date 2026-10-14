@@ -35,7 +35,7 @@ The main screen is a searchable two-column list of installed games and apps (app
 
 There is no automation switch: automatic switching runs whenever setup is complete. Unassigned apps keep the system preference. Before the first profile is applied, the app remembers your Retroid mode; after leaving profiled apps it restores that mode. Switching between profiled apps does not replace the remembered preference. Choose your normal mode in the usual Retroid settings. The saved session survives process death.
 
-Settings shows whether setup is complete, plus About and technical diagnostics. The app is English-only. Native controls work with touch or D-pad focus.
+Settings shows whether setup is complete, the update check (on by default, with *Check now*), About, open-source licenses and technical diagnostics. The app is English-only. Native controls work with touch or D-pad focus.
 
 ## Safety and privacy
 
@@ -45,7 +45,7 @@ The shell helper requires UID 2000 and the verified firmware fingerprint. Unknow
 
 The accessibility service uses window package/class metadata only; it cannot retrieve window contents or intercept keys. Notification shade, keyboard, permission windows, dialogs and game-assistant overlays neither reset the controller mode nor cancel a pending switch. Pending transitions are debounced and superseded by the next app. Cooldown prevents repeated reinitialization. Background operation is event-driven; transition verification is bounded, not continuous polling.
 
-Installed apps, profiles and recent diagnostic events stay locally. No ads, telemetry, accounts or cloud storage. The only network access is the update check described below, which sends an anonymous request to the GitHub API and can be turned off in Settings. QUERY_ALL_PACKAGES is used for the explicit installed-app profile list. Diagnostic events contain recent package identifiers, not screen text. The optional button tester consumes controller buttons only inside the app while explicitly enabled; it does not log them.
+Installed apps, profiles and recent diagnostic events stay on the device (release builds do not write them to the system log; cloud backup and device-to-device transfer are excluded). No ads, telemetry, accounts or cloud storage. The only network access is the update check described below, which sends an anonymous request to the GitHub API and can be turned off in Settings. QUERY_ALL_PACKAGES is used for the explicit installed-app profile list. Diagnostic events contain recent package identifiers, not screen text. The optional button tester consumes controller buttons only inside the app while explicitly enabled; it does not log them.
 
 ## Updates and releases
 
@@ -55,7 +55,7 @@ When the app opens it checks this repository's GitHub Releases (at most every 6 
 
 To publish a release:
 
-1. Set `updateRepo=owner/repo` in `gradle.properties` and bump `versionCode` / `versionName` in `app/build.gradle.kts`.
+1. Bump `appVersion` in `app/build.gradle.kts` (`MAJOR.MINOR.PATCH[-alpha|-beta|-rc[.N]]`); `versionCode` is derived from it. `updateRepo` in `gradle.properties` already points at this repository.
 2. `.\gradlew.bat assembleRelease testDebugUnitTest lintRelease` with `keystore.properties` present (see *Release signing*).
 3. Create a GitHub release whose tag is the version (for example `v0.4.0-beta`; pre-releases count) and attach `Flip2LayoutSwitcher-<version>-release.apk`. The first `.apk` asset of the newest non-draft release is used. Release notes are shown in the update dialog.
 
@@ -99,13 +99,13 @@ adb -s YOUR_SERIAL shell am instrument -w -e class app.flip2layout.switcher.Prof
 
 The UI test checks app search, profile selection, Save, refresh and Activity recreation; it restores the original profile and never launches a game or requests hardware switching. It is skipped if the test app (Eden Nightly) is not installed.
 
-`am instrument` force-stops the app before and after the run, which turns the accessibility service off (see above). Re-enable it afterwards, and verify automatic switching with normal manual device tests rather than instrumentation. `AutomaticSwitchTest` launches games and is opt-in only (`-e hardwareTests true`).
+`am instrument` force-stops the app before and after the run, which turns the accessibility service off (see above). Re-enable it afterwards, and verify automatic switching with normal manual device tests rather than instrumentation.
 
-`tools/Snapshot.ps1 -Serial ... -Label ...` captures read-only firmware/settings/input diagnostics with identity checks. `tools/Compare-Snapshots.ps1` compares them locally. Device evidence and third-party UI reference screenshots are excluded from source distribution.
+Developer tools (Windows PowerShell; `Capture-Frame.ps1` needs PowerShell 7): `tools/Snapshot.ps1 -Serial ... -Label ...` captures read-only firmware/settings/input diagnostics with identity checks. `tools/Compare-Snapshots.ps1` compares them locally. Device evidence and third-party UI reference screenshots are excluded from source distribution.
 
 ## Source layout
 
-- `MainActivity`: compact app list, setup, settings, diagnostics and localized Material 3 UI.
+- `MainActivity`: compact app list with Save bar, setup, settings, licenses and diagnostics (English-only Material 3 UI).
 - `ProfileStore` / `ModeSession`: persistent per-app preferences and original Retroid mode restoration.
 - `ControllerShell`: narrowly scoped Shizuku UserService / AIDL with UID and firmware guards.
 - `ControllerAccess`: serialized changes, bounded reconnect confirmation and backend availability.

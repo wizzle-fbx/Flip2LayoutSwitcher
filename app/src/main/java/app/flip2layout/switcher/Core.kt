@@ -20,6 +20,8 @@ class SwitchPlanner {
     fun reset() { cancel(); lastAttempt = null }
     fun offer(packageName: String?, mode: Mode, now: Long, isHome: Boolean = false) {
         if (packageName == null) { cancel(); return }
+        // A different app came to front: forget the last attempt so returning to it switches again.
+        if (lastAttempt != null && lastAttempt?.first != packageName) lastAttempt = null
         val key = packageName to mode
         if (lastAttempt == key) { cancel(); return }
         if (pending?.let { it.packageName to it.mode } == key) return
@@ -49,11 +51,4 @@ data class ModeSession(val normal: Mode? = null, val override: Mode? = null) {
         observed == null || observed == override -> this
         else -> ModeSession(observed)
     }
-}
-
-/** Launcher calls its action only after the backend confirms both settings and hardware. */
-suspend fun launchAfterSwitch(mode: Mode, switch: suspend (Mode) -> SwitchResult, launch: () -> Unit): SwitchResult {
-    val result = switch(mode)
-    if (result.confirmed) launch()
-    return result
 }

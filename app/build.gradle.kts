@@ -4,6 +4,22 @@ import java.util.Properties
 val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
     Properties().apply { file.inputStream().use { load(it) } }
 }
+fun keystoreValue(key: String): String = keystore?.getProperty(key)?.takeIf { it.isNotBlank() }
+    ?: throw GradleException("keystore.properties: '$key' is missing or empty")
+
+// Bump only this. versionCode is derived from it so the in-app updater (which compares names) and Android
+// (which requires a higher versionCode) always agree: MAJOR.MINOR.PATCH[-alpha|-beta|-rc[.N]].
+val appVersion = "0.3.0-beta"
+fun versionCodeOf(version: String): Int {
+    val (major, minor, patch) = version.substringBefore('-').split('.').map { it.toInt() }
+    val pre = version.substringAfter('-', "")
+    val preRank = if (pre.isEmpty()) 99 else {
+        val number = pre.substringAfter('.', "0").toInt().also { require(it in 0..9) { "Pre-release number must be 0-9: $version" } }
+        number + when (pre.substringBefore('.')) { "alpha" -> 10; "beta" -> 30; "rc" -> 60; else -> throw GradleException("Unsupported pre-release in $version") }
+    }
+    require(minor < 100 && patch < 100) { "Minor and patch must be below 100: $version" }
+    return ((major * 100 + minor) * 100 + patch) * 100 + preRank
+}
 
 plugins {
     id("com.android.application")
@@ -16,8 +32,8 @@ android {
         applicationId = "app.flip2layout.switcher"
         minSdk = 33
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0-beta"
+        versionCode = versionCodeOf(appVersion)
+        versionName = appVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // "owner/repo" whose GitHub Releases provide updates; empty disables the update check.
         buildConfigField("String", "UPDATE_REPO", "\"${providers.gradleProperty("updateRepo").getOrElse("")}\"")
@@ -29,10 +45,10 @@ android {
     }
     signingConfigs {
         if (keystore != null) create("release") {
-            storeFile = rootProject.file(keystore.getProperty("storeFile"))
-            storePassword = keystore.getProperty("storePassword")
-            keyAlias = keystore.getProperty("keyAlias")
-            keyPassword = keystore.getProperty("keyPassword")
+            storeFile = rootProject.file(keystoreValue("storeFile"))
+            storePassword = keystoreValue("storePassword")
+            keyAlias = keystoreValue("keyAlias")
+            keyPassword = keystoreValue("keyPassword")
         }
     }
     buildTypes { release { isMinifyEnabled = false; signingConfig = signingConfigs.findByName("release") } }

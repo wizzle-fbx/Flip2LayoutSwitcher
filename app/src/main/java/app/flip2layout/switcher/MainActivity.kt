@@ -14,6 +14,8 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -138,6 +140,13 @@ class MainActivity : ComponentActivity() {
         val standbyCleanup = remember(lifecycleVersion) { standbyCleanupStopsApp() }
         // Without the whitelist, clearing Recents silently turns automation off later; treat it as a setup step.
         val setupDone = complete && whitelisted != false && !standbyCleanup
+        // One priority for the banner and the Settings card: unsupported firmware, then setup, then a failed switch.
+        val problem = when {
+            !app.controller.supported -> R.string.unsupported_hint
+            !setupDone -> R.string.setup_banner
+            error != null -> R.string.automation_error
+            else -> null
+        }
         val shizukuInstalled = remember(lifecycleVersion, ready, status) { app.controller.shizukuInstalled() }
         val shizukuRunning = remember(lifecycleVersion, ready, status) { app.controller.shizukuRunning() }
         val permission = remember(lifecycleVersion, ready, status) { app.controller.hasPermission() }
@@ -159,21 +168,33 @@ class MainActivity : ComponentActivity() {
         val downloading by app.updater.progress.collectAsState()
         var updateDismissed by rememberSaveable { mutableStateOf<String?>(null) }
         var autoUpdate by remember { mutableStateOf(app.updater.automatic) }
-        LaunchedEffect(Unit) { runCatching { app.updater.check() }.onFailure { app.report("Update check failed: ${it.message}") } }
-        fun checkNow() = scope.launch {
-            val found = runCatching { app.updater.check(force = true) }
-                .onFailure { snackbar.showSnackbar(getString(R.string.update_check_failed)) }.getOrNull()
-            if (found == null) snackbar.showSnackbar(getString(R.string.up_to_date)) else updateDismissed = null
+        var showLicenses by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) {
+            try { app.updater.check() }
+            catch (e: CancellationException) { throw e }
+            catch (e: Exception) { app.report("Update check failed: ${e.message}") }
         }
-        BackHandler(page != "apps") { page = if (page == "diagnostics") "settings" else "apps"; testingKeys = false }
+        fun checkNow() = scope.launch {
+            try {
+                if (app.updater.check(force = true) == null) snackbar.showSnackbar(getString(R.string.up_to_date)) else updateDismissed = null
+            } catch (e: CancellationException) { throw e }
+            catch (e: Exception) { app.report("Update check failed: ${e.message}"); snackbar.showSnackbar(getString(R.string.update_check_failed)) }
+        }
+        // Setup can be opened from the app list or from Settings; Back and Done return to where it was opened.
+        var setupFrom by rememberSaveable { mutableStateOf("apps") }
+        fun openSetup(from: String) { setupFrom = from; page = "setup" }
+        fun back() { page = when (page) { "diagnostics" -> "settings"; "setup" -> setupFrom; else -> "apps" }; testingKeys = false }
+        BackHandler(page != "apps") { back() }
         LaunchedEffect(page) { if (page != "diagnostics") testingKeys = false }
+        // The button tester consumes A/B/X/Y; it switches itself off so controller-only users are never stuck in it.
+        LaunchedEffect(testingKeys, keyReport) { if (testingKeys) { delay(10_000); testingKeys = false } }
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             topBar = {
                 if (page != "apps") TopAppBar(title = { Text(stringResource(when (page) {
                     "setup" -> R.string.setup; "diagnostics" -> R.string.diagnostics; else -> R.string.settings
                 }), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold) },
-                    navigationIcon = { IconButton({ page = if (page == "diagnostics") "settings" else "apps" }) {
+                    navigationIcon = { IconButton({ back() }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back))
                     } })
             },
@@ -195,13 +216,14 @@ class MainActivity : ComponentActivity() {
                             IconButton({ refresh() }, enabled = !loading) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
                             IconButton({ page = "settings" }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
                         }
-                        if (!setupDone || !app.controller.supported || error != null) {
+                        problem?.let { message ->
                             Card(Modifier.fillMaxWidth().padding(top = 8.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
                                 Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Text(stringResource(when { !app.controller.supported -> R.string.unsupported_hint; !setupDone -> R.string.setup_banner; else -> R.string.automation_error }),
-                                        Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onErrorContainer,
-                                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                    TextButton({ page = "setup" }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.open_setup)) }
+                                    Text(stringResource(message), Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onErrorContainer, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    // A failed switch is not fixed by setup; let the user acknowledge it instead.
+                                    if (message == R.string.automation_error) TextButton({ app.clearError() }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.dismiss)) }
+                                    else TextButton({ openSetup("apps") }, Modifier.heightIn(min = 48.dp)) { Text(stringResource(R.string.setup)) }
                                 }
                             }
                         }
@@ -232,10 +254,11 @@ class MainActivity : ComponentActivity() {
                         item { Text(stringResource(R.string.setup_intro), style = MaterialTheme.typography.bodyMedium) }
                         if (!app.controller.supported) item { Text(stringResource(R.string.unsupported_hint), color = MaterialTheme.colorScheme.error) }
                         // Whitelist first: until it is set, clearing Recents mid-setup would undo the accessibility step.
-                        item { SetupStep("1", R.string.step_whitelist, whitelisted == true && !standbyCleanup) {
+                        // An unreadable whitelist (null) is not treated as missing, matching the banner.
+                        item { SetupStep("1", R.string.step_whitelist, whitelisted != false && !standbyCleanup) {
                             Text(stringResource(if (whitelisted == true) R.string.whitelist_done_hint else R.string.whitelist_hint), style = MaterialTheme.typography.bodyMedium)
                             if (standbyCleanup) Text(stringResource(R.string.standby_cleanup_warning), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                            if (whitelisted != true || standbyCleanup) Button({ openHandheldSettings() }) { Text(stringResource(R.string.open_handheld_settings)) }
+                            if (whitelisted == false || standbyCleanup) Button({ openHandheldSettings() }) { Text(stringResource(R.string.open_handheld_settings)) }
                         } }
                         item { SetupStep("2", R.string.step_control, ready) {
                             val hint = when {
@@ -248,7 +271,11 @@ class MainActivity : ComponentActivity() {
                                     !shizukuInstalled -> getShizuku()
                                     !shizukuRunning -> openShizuku()
                                     else -> app.controller.requestAccess()
-                                } }) { Text(stringResource(when { !shizukuInstalled -> R.string.download_shizuku; !shizukuRunning -> R.string.open_shizuku; else -> R.string.grant_access })) }
+                                } }) { Text(stringResource(when {
+                                    !shizukuInstalled -> R.string.download_shizuku; !shizukuRunning -> R.string.open_shizuku
+                                    // Permission already granted but not ready yet: retry the connection instead of asking again.
+                                    permission -> R.string.retry; else -> R.string.grant_access
+                                })) }
                                 if (!shizukuRunning && shizukuInstalled) TextButton({ open(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/guide/setup/"))) }) { Text(stringResource(R.string.shizuku_guide)) }
                             }
                         } }
@@ -261,15 +288,15 @@ class MainActivity : ComponentActivity() {
                             if (!connected || !detectionEnabled) TextButton({ restrictedHelp = true }) { Text(stringResource(R.string.restricted_help)) }
                         } }
                         item { Text(stringResource(R.string.restart_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        item { Button({ page = "apps" }) { Text(stringResource(R.string.done)) } }
+                        item { Button({ back() }) { Text(stringResource(R.string.done)) } }
                     }
                     "settings" -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(16.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
                         item { Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
                             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                                Icon(if (setupDone) Icons.Default.CheckCircle else Icons.Default.Warning, null,
-                                    tint = if (setupDone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                                Text(stringResource(if (setupDone) R.string.status_ready else R.string.setup_banner), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                                TextButton({ page = "setup" }) { Text(stringResource(R.string.open_setup)) }
+                                Icon(if (problem == null) Icons.Default.CheckCircle else Icons.Default.Warning, null,
+                                    tint = if (problem == null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
+                                Text(stringResource(problem ?: R.string.status_ready), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                                TextButton({ openSetup("settings") }) { Text(stringResource(R.string.setup)) }
                             }
                         } }
                         if (app.updater.enabled) item { Row(verticalAlignment = Alignment.CenterVertically) {
@@ -278,16 +305,27 @@ class MainActivity : ComponentActivity() {
                                 Text(stringResource(R.string.updates_hint), style = MaterialTheme.typography.bodySmall)
                             }
                             TextButton({ checkNow() }) { Text(stringResource(R.string.check_now)) }
-                            Switch(autoUpdate, { autoUpdate = it; app.updater.automatic = it })
+                            val label = stringResource(R.string.updates)
+                            Switch(autoUpdate, { autoUpdate = it; app.updater.automatic = it }, Modifier.semantics { contentDescription = label })
                         } }
                         item { Text(stringResource(R.string.about), style = MaterialTheme.typography.titleSmall); Text(stringResource(R.string.about_text), style = MaterialTheme.typography.bodySmall)
                             Text("${BuildConfig.VERSION_NAME} · ${android.os.Build.MODEL}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            TextButton({ page = "diagnostics" }) { Text(stringResource(R.string.technical_details)) }
+                            Row {
+                                TextButton({ page = "diagnostics" }) { Text(stringResource(R.string.technical_details)) }
+                                TextButton({ showLicenses = true }) { Text(stringResource(R.string.licenses)) }
+                            }
                         }
                     }
                     "diagnostics" -> LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp), contentPadding = PaddingValues(bottom = 20.dp)) {
                         item { SelectionContainer { Text("${getString(R.string.supported_firmware)}: ${app.controller.supported}\n${android.os.Build.FINGERPRINT}\n\n${app.controller.devices()}", style = MaterialTheme.typography.bodySmall) } }
-                        item { Row(verticalAlignment = Alignment.CenterVertically) { Text(stringResource(R.string.test_buttons), Modifier.weight(1f)); Switch(testingKeys, { testingKeys = it }) }; Text(keyReport.ifEmpty { getString(R.string.press_buttons) }) }
+                        item {
+                            val label = stringResource(R.string.test_buttons)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, Modifier.weight(1f))
+                                Switch(testingKeys, { testingKeys = it }, Modifier.semantics { contentDescription = label })
+                            }
+                            Text(keyReport.ifEmpty { getString(R.string.press_buttons) })
+                        }
                         item { Text(stringResource(R.string.privacy), style = MaterialTheme.typography.titleSmall); Text(stringResource(R.string.privacy_text), style = MaterialTheme.typography.bodySmall) }
                         items(logs.takeLast(12)) { Text(it, style = MaterialTheme.typography.bodySmall) }
                     }
@@ -298,7 +336,10 @@ class MainActivity : ComponentActivity() {
             AlertDialog(onDismissRequest = { if (downloading == null) updateDismissed = release.version },
                 title = { Text(stringResource(R.string.update_title, release.version.removePrefix("v"))) },
                 text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(release.notes.take(600).ifBlank { getString(R.string.update_text) }, style = MaterialTheme.typography.bodyMedium)
+                    // Release notes are Markdown; show them as plain, scrollable text so the buttons stay on screen.
+                    val notes = release.notes.take(1500).replace(Regex("""\[([^\]]+)]\([^)]*\)"""), "$1").replace(Regex("[#*_`>]"), "").trim()
+                    Text(notes.ifBlank { getString(R.string.update_text) }, Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodyMedium)
                     downloading?.let { LinearProgressIndicator({ it }, Modifier.fillMaxWidth()) }
                 } },
                 confirmButton = { TextButton({ scope.launch {
@@ -308,6 +349,12 @@ class MainActivity : ComponentActivity() {
                 } }, enabled = downloading == null) { Text(stringResource(R.string.update_now)) } },
                 dismissButton = { TextButton({ updateDismissed = release.version }, enabled = downloading == null) { Text(stringResource(R.string.later)) } })
         }
+        if (showLicenses) AlertDialog(onDismissRequest = { showLicenses = false }, title = { Text(stringResource(R.string.licenses)) },
+            text = {
+                val text = remember { resources.openRawResource(R.raw.open_source_licenses).bufferedReader().use { it.readText() } }
+                SelectionContainer { Text(text, Modifier.verticalScroll(rememberScrollState()), style = MaterialTheme.typography.bodySmall) }
+            },
+            confirmButton = { TextButton({ showLicenses = false }) { Text(stringResource(R.string.done)) } })
         if (restrictedHelp) AlertDialog(onDismissRequest = { restrictedHelp = false }, title = { Text(stringResource(R.string.restricted_title)) },
             text = { Text(stringResource(R.string.restricted_text)) }, confirmButton = { TextButton({ restrictedHelp = false; open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }) { Text(stringResource(R.string.open_app_info)) } },
             dismissButton = { TextButton({ restrictedHelp = false }) { Text(stringResource(R.string.done)) } })
@@ -339,23 +386,26 @@ class MainActivity : ComponentActivity() {
         }
     }
     @Composable private fun AppCell(entry: InstalledApp, selected: Mode?, changed: Boolean, onSelect: (Mode) -> Unit) {
-        val description = stringResource(R.string.choose_mode_for, entry.label)
         Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Image(entry.icon, null, Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)))
             Text(entry.label, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             // Small dot marks a choice that is not saved yet.
-            if (changed) Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary))
-            Box(Modifier.semantics { contentDescription = description }) { ModePicker(selected, entry.pkg, onSelect) }
+            val unsaved = stringResource(R.string.not_saved)
+            if (changed) Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary).semantics { contentDescription = unsaved })
+            ModePicker(selected, entry.pkg, entry.label, onSelect)
         }
     }
     @OptIn(ExperimentalMaterial3Api::class)
-    @Composable private fun ModePicker(selected: Mode?, pkg: String, onSelect: (Mode) -> Unit) {
+    @Composable private fun ModePicker(selected: Mode?, pkg: String, appLabel: String, onSelect: (Mode) -> Unit) {
         SingleChoiceSegmentedButtonRow(Modifier.width(184.dp)) {
             Mode.entries.forEachIndexed { index, target ->
+                // Screen readers announce "Retro for 9Kings" instead of a bare "Retro".
+                val description = stringResource(R.string.mode_for_app, target.label, appLabel)
                 SegmentedButton(selected = selected == target, onClick = { onSelect(target) },
                     shape = SegmentedButtonDefaults.itemShape(index, Mode.entries.size),
-                    modifier = Modifier.heightIn(min = 48.dp).testTag("profile-$pkg-${target.name}"), label = { Text(target.label) })
+                    modifier = Modifier.heightIn(min = 48.dp).testTag("profile-$pkg-${target.name}").semantics { contentDescription = description },
+                    label = { Text(target.label) })
             }
         }
     }

@@ -60,6 +60,10 @@ object Versions {
  * Android itself rejects an update signed with a different key, so only the maintainer's builds can install.
  */
 class Updater(private val app: ProfilesApplication) {
+    private companion object {
+        const val MAX_APK = 50L * 1024 * 1024
+        const val MAX_JSON = 512 * 1024
+    }
     private val prefs = app.getSharedPreferences("updates", Context.MODE_PRIVATE)
     private val _available = MutableStateFlow<Release?>(null)
     val available = _available.asStateFlow()
@@ -71,10 +75,16 @@ class Updater(private val app: ProfilesApplication) {
         set(value) { prefs.edit().putBoolean("automatic", value).apply() }
 
     /** Returns the newer release, if any. Without [force] it runs at most every 6 hours and only when automatic. */
+    /** A release found earlier survives process restarts so the 6-hour throttle cannot hide it. */
+    private fun remembered(): Release? = prefs.getString("found_version", null)?.let { version ->
+        Release(version, prefs.getString("found_url", null) ?: return null, prefs.getString("found_notes", "") ?: "")
+    }?.takeIf { Versions.compare(it.version, BuildConfig.VERSION_NAME) > 0 }
+
+    /** Returns the newer release, if any. Without [force] it runs at most every 6 hours and only when automatic. */
     suspend fun check(force: Boolean = false): Release? {
         if (!enabled || (!force && !automatic)) return null
         val now = System.currentTimeMillis()
-        if (!force && now - prefs.getLong("checked_at", 0) < 6 * 3600_000L) return _available.value
+        if (!force && now - prefs.getLong("checked_at", 0) < 6 * 3600_000L) return remembered().also { _available.value = it }
         val release = withContext(Dispatchers.IO) {
             val conn = (URL("https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases?per_page=10").openConnection() as HttpURLConnection).apply {
                 connectTimeout = 10_000; readTimeout = 10_000
@@ -83,12 +93,17 @@ class Updater(private val app: ProfilesApplication) {
             }
             try {
                 check(conn.responseCode == 200) { "GitHub returned ${conn.responseCode}" }
-                Versions.newest(conn.inputStream.bufferedReader().use { it.readText() })
+                val bytes = conn.inputStream.use { it.readNBytes(MAX_JSON + 1) }
+                check(bytes.size <= MAX_JSON) { "GitHub response too large" }
+                val body = String(bytes, Charsets.UTF_8)
+                Versions.newest(body)
             } finally { conn.disconnect() }
         }
-        prefs.edit().putLong("checked_at", now).apply()
-        _available.value = release?.takeIf { Versions.compare(it.version, BuildConfig.VERSION_NAME) > 0 }
-        return _available.value
+        val newer = release?.takeIf { Versions.compare(it.version, BuildConfig.VERSION_NAME) > 0 }
+        prefs.edit().putLong("checked_at", now).putString("found_version", newer?.version)
+            .putString("found_url", newer?.apkUrl).putString("found_notes", newer?.notes).apply()
+        _available.value = newer
+        return newer
     }
 
     /** Downloads [release] and hands it to the system installer, which asks the user to confirm. */
@@ -97,18 +112,23 @@ class Updater(private val app: ProfilesApplication) {
         try {
             progress.value = 0f
             withContext(Dispatchers.IO) {
-                val conn = (URL(release.apkUrl).openConnection() as HttpURLConnection).apply {
+                // Release assets are served from github.com over HTTPS (redirects stay on HTTPS).
+                val url = URL(release.apkUrl)
+                check(url.protocol == "https" && url.host == "github.com") { "Unexpected download location" }
+                val conn = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000; readTimeout = 30_000; instanceFollowRedirects = true
                     setRequestProperty("User-Agent", "Flip2LayoutSwitcher/${BuildConfig.VERSION_NAME}")
                 }
                 try {
                     check(conn.responseCode == 200) { "Download failed (${conn.responseCode})" }
                     val total = conn.contentLengthLong
+                    check(total <= MAX_APK) { "Download too large" }
                     conn.inputStream.use { input -> file.outputStream().use { out ->
                         val buffer = ByteArray(64 * 1024); var done = 0L
                         while (true) {
                             val n = input.read(buffer); if (n < 0) break
                             out.write(buffer, 0, n); done += n
+                            check(done <= MAX_APK) { "Download too large" }
                             if (total > 0) progress.value = done.toFloat() / total
                         }
                     } }
@@ -120,11 +140,17 @@ class Updater(private val app: ProfilesApplication) {
                 val installer = app.packageManager.packageInstaller
                 val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply { setAppPackageName(app.packageName) }
                 val id = installer.createSession(params)
-                installer.openSession(id).use { session ->
-                    session.openWrite("base.apk", 0, file.length()).use { out -> file.inputStream().use { it.copyTo(out) }; session.fsync(out) }
-                    val callback = PendingIntent.getBroadcast(app, id, Intent(app, UpdateReceiver::class.java),
-                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                    session.commit(callback.intentSender)
+                try {
+                    installer.openSession(id).use { session ->
+                        session.openWrite("base.apk", 0, file.length()).use { out -> file.inputStream().use { it.copyTo(out) }; session.fsync(out) }
+                        val callback = PendingIntent.getBroadcast(app, id, Intent(app, UpdateReceiver::class.java),
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+                        session.commit(callback.intentSender)
+                    }
+                } catch (e: Exception) {
+                    // Do not leave a staged copy behind in the system installer.
+                    runCatching { installer.abandonSession(id) }
+                    throw e
                 }
             }
             app.report("Update ${release.version} handed to the installer.")

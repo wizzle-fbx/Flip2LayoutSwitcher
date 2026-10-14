@@ -76,6 +76,7 @@ class ProfilesApplication : Application() {
     }
     /** Unsaved profile choices; kept here so Activity recreation (e.g. controller reconnect) does not lose them. */
     val draft = MutableStateFlow<Map<String, Mode?>>(emptyMap())
+    fun clearError() { _error.value = null }
     fun saveDraft(): Boolean {
         val changes = draft.value
         if (changes.isEmpty()) return false
@@ -111,7 +112,8 @@ class ProfilesApplication : Application() {
     fun report(message: String) {
         _status.value = message
         _log.value = (_log.value + "${java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.ROOT).format(java.util.Date())}  $message").takeLast(40)
-        android.util.Log.i("Flip2LayoutSwitcher", message)
+        // Release builds keep diagnostics in app-private storage only, not in the shared system log.
+        if (BuildConfig.DEBUG) android.util.Log.i("Flip2LayoutSwitcher", message)
         // Bounded app-private diagnostics; no window text or pairing codes.
         runCatching { java.io.File(filesDir, "events.txt").writeText(_log.value.joinToString("\n")) }
     }
