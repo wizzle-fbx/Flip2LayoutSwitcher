@@ -3,6 +3,7 @@ package app.flip2layout.switcher
 import android.app.Application
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -29,16 +30,17 @@ class ProfileStore(context: Context) {
     init {
         // Earlier betas stored a default mode and an automation on/off switch; automation is now always on.
         val legacy = listOf("default", "automatic", "boot", "setup_seen").filter(prefs::contains)
-        if (legacy.isNotEmpty()) prefs.edit().apply { legacy.forEach(::remove) }.apply()
+        if (legacy.isNotEmpty()) prefs.edit { legacy.forEach(::remove) }
         prefs.registerOnSharedPreferenceChangeListener(listener)
     }
     fun setProfile(pkg: String, mode: Mode?) = setProfiles(mapOf(pkg to mode))
     /** One commit for a batch of edits; a null mode removes the app's profile. */
     fun setProfiles(changes: Map<String, Mode?>) {
-        prefs.edit().apply { changes.forEach { (pkg, mode) -> if (mode == null) remove("profile:$pkg") else putString("profile:$pkg", mode.name) } }.apply()
+        prefs.edit { changes.forEach { (pkg, mode) -> if (mode == null) remove("profile:$pkg") else putString("profile:$pkg", mode.name) } }
         _state.value = read()
     }
     /** Persists before an override is applied so process death cannot lose the system preference; false if the write failed. */
+    @android.annotation.SuppressLint("UseKtx")  // needs commit()'s result, which edit { } does not return
     fun session(value: ModeSession): Boolean {
         val saved = sessionPrefs.edit().putString("normal", value.normal?.name).putString("override", value.override?.name).commit()
         if (saved) _session.value = value
@@ -84,7 +86,7 @@ class ProfilesApplication : Application() {
         return true
     }
     suspend fun applyProfile(profile: Mode?, allowed: () -> Boolean = { true }): SwitchResult = sessionMutex.withLock {
-        if (!allowed()) return@withLock SwitchResult(false, "Cancelled before switching")
+        if (!allowed()) return@withLock SwitchResult(false, "Cancelled before switching", cancelled = true)
         val before = store.session.value
         val target = before.target(profile) ?: return@withLock SwitchResult(true, "System preference kept")
         // Session bookkeeping must follow the switch even if the caller is cancelled meanwhile.

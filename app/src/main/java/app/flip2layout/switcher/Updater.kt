@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -72,9 +73,13 @@ class Updater(private val app: ProfilesApplication) {
     val enabled get() = BuildConfig.UPDATE_REPO.isNotBlank() && !BuildConfig.DEBUG
     var automatic: Boolean
         get() = prefs.getBoolean("automatic", true)
-        set(value) { prefs.edit().putBoolean("automatic", value).apply() }
+        set(value) { prefs.edit { putBoolean("automatic", value) } }
 
-    /** Returns the newer release, if any. Without [force] it runs at most every 6 hours and only when automatic. */
+    /** The installer's confirmation screen, kept until an Activity can show it (Android blocks it from the background). */
+    val pendingConfirmation = MutableStateFlow<Intent?>(null)
+    /** True while MainActivity is resumed, so the receiver knows whether it may start the confirmation directly. */
+    @Volatile var activityVisible = false
+
     /** A release found earlier survives process restarts so the 6-hour throttle cannot hide it. */
     private fun remembered(): Release? = prefs.getString("found_version", null)?.let { version ->
         Release(version, prefs.getString("found_url", null) ?: return null, prefs.getString("found_notes", "") ?: "")
@@ -100,8 +105,10 @@ class Updater(private val app: ProfilesApplication) {
             } finally { conn.disconnect() }
         }
         val newer = release?.takeIf { Versions.compare(it.version, BuildConfig.VERSION_NAME) > 0 }
-        prefs.edit().putLong("checked_at", now).putString("found_version", newer?.version)
-            .putString("found_url", newer?.apkUrl).putString("found_notes", newer?.notes).apply()
+        prefs.edit {
+            putLong("checked_at", now).putString("found_version", newer?.version)
+                .putString("found_url", newer?.apkUrl).putString("found_notes", newer?.notes)
+        }
         _available.value = newer
         return newer
     }
@@ -112,9 +119,10 @@ class Updater(private val app: ProfilesApplication) {
         try {
             progress.value = 0f
             withContext(Dispatchers.IO) {
-                // Release assets are served from github.com over HTTPS (redirects stay on HTTPS).
+                // Only this repository's release assets, over HTTPS (redirects to GitHub's storage stay on HTTPS).
                 val url = URL(release.apkUrl)
-                check(url.protocol == "https" && url.host == "github.com") { "Unexpected download location" }
+                check(url.protocol == "https" && url.host == "github.com" &&
+                    url.path.startsWith("/${BuildConfig.UPDATE_REPO}/releases/download/")) { "Unexpected download location" }
                 val conn = (url.openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000; readTimeout = 30_000; instanceFollowRedirects = true
                     setRequestProperty("User-Agent", "Flip2LayoutSwitcher/${BuildConfig.VERSION_NAME}")
@@ -167,7 +175,10 @@ class UpdateReceiver : BroadcastReceiver() {
         val app = context.applicationContext as ProfilesApplication
         when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let(context::startActivity)
+                val confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                // From the background Android silently blocks this; MainActivity shows it on its next resume instead.
+                if (confirm != null && app.updater.activityVisible) context.startActivity(confirm)
+                else app.updater.pendingConfirmation.value = confirm
             }
             PackageInstaller.STATUS_SUCCESS -> app.report("Update installed.")
             else -> app.report("Update not installed ($status): ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")

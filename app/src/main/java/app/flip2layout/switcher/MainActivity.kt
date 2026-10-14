@@ -3,9 +3,9 @@ package app.flip2layout.switcher
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.net.Uri
+import androidx.core.graphics.createBitmap
+import androidx.core.net.toUri
 import android.os.Bundle
 import android.provider.Settings
 import android.view.KeyEvent
@@ -47,6 +47,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 
 data class InstalledApp(val pkg: String, val label: String, val system: Boolean, val launchable: Boolean, val icon: ImageBitmap)
@@ -70,7 +71,13 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-    override fun onResume() { super.onResume(); resumeVersion++; app.controller.connectIfAllowed(); app.controller.refreshCurrent() }
+    override fun onResume() {
+        super.onResume(); resumeVersion++; app.controller.connectIfAllowed(); app.controller.refreshCurrent()
+        app.updater.activityVisible = true
+        // An update confirmation that arrived while the app was in the background.
+        app.updater.pendingConfirmation.getAndUpdate { null }?.let { runCatching { startActivity(it) } }
+    }
+    override fun onPause() { app.updater.activityVisible = false; super.onPause() }
     // Leaving without pressing Save must not lose choices; recreation keeps the draft in the Application.
     override fun onStop() { super.onStop(); if (!isChangingConfigurations) app.saveDraft() }
     // Public Activity callback; inherited AndroidX core annotation is a lint false positive.
@@ -89,7 +96,7 @@ class MainActivity : ComponentActivity() {
         packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
             .filter { it.packageName != packageName }.mapNotNull { info -> runCatching {
                 val icon = info.loadIcon(packageManager)
-                val bitmap = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+                val bitmap = createBitmap(64, 64)
                 icon.setBounds(0, 0, 64, 64); icon.draw(Canvas(bitmap))
                 InstalledApp(info.packageName, info.loadLabel(packageManager).toString(),
                     info.flags and ApplicationInfo.FLAG_SYSTEM != 0,
@@ -100,8 +107,8 @@ class MainActivity : ComponentActivity() {
     private fun openShizuku() { packageManager.getLaunchIntentForPackage(SHIZUKU_PACKAGE)?.let(::open) }
     // Retroid devices ship the Play Store; fall back to the official download page without it.
     private fun getShizuku() = runCatching {
-        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$SHIZUKU_PACKAGE")).setPackage("com.android.vending"))
-    }.onFailure { open(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/download/"))) }
+        startActivity(Intent(Intent.ACTION_VIEW, "market://details?id=$SHIZUKU_PACKAGE".toUri()).setPackage("com.android.vending"))
+    }.onFailure { open(Intent(Intent.ACTION_VIEW, "https://shizuku.rikka.app/download/".toUri())) }
     private fun openHandheldSettings() = open(Intent().setClassName("com.rp.settings", "com.ro.settings.activity.MainSettingsActivity"))
     /** Retroid's launcher skips force-stop for packages in this vendor key. Null if it cannot be read. */
     private fun retroidWhitelisted(): Boolean? = runCatching {
@@ -150,11 +157,15 @@ class MainActivity : ComponentActivity() {
         val shizukuInstalled = remember(lifecycleVersion, ready, status) { app.controller.shizukuInstalled() }
         val shizukuRunning = remember(lifecycleVersion, ready, status) { app.controller.shizukuRunning() }
         val permission = remember(lifecycleVersion, ready, status) { app.controller.hasPermission() }
-        fun refresh() { if (loading && apps.isNotEmpty()) return; scope.launch {
-            loading = true; loadFailed = false
-            try { apps = installedApps() } catch (_: Exception) { loadFailed = true }
-            finally { loading = false }
-        } }
+        var loadJob by remember { mutableStateOf<Job?>(null) }
+        fun refresh() {
+            if (loadJob?.isActive == true) return  // first composition and the first resume can both ask
+            loadJob = scope.launch {
+                loading = true; loadFailed = false
+                try { apps = installedApps() } catch (e: CancellationException) { throw e } catch (_: Exception) { loadFailed = true }
+                finally { loading = false }
+            }
+        }
         fun choose(pkg: String, mode: Mode) = app.draft.update { current ->
             // Read the live draft, not the last composed one, so quick successive taps are not lost.
             val saved = app.store.state.value.profiles[pkg]
@@ -163,7 +174,8 @@ class MainActivity : ComponentActivity() {
             val next = if (shown == mode) null else mode
             if (next == saved) current - pkg else current + (pkg to next)
         }
-        LaunchedEffect(Unit) { refresh() }
+        // Load on first show and again on every return, so a game installed meanwhile appears without tapping Refresh.
+        LaunchedEffect(lifecycleVersion) { refresh() }
         val update by app.updater.available.collectAsState()
         val downloading by app.updater.progress.collectAsState()
         var updateDismissed by rememberSaveable { mutableStateOf<String?>(null) }
@@ -276,7 +288,7 @@ class MainActivity : ComponentActivity() {
                                     // Permission already granted but not ready yet: retry the connection instead of asking again.
                                     permission -> R.string.retry; else -> R.string.grant_access
                                 })) }
-                                if (!shizukuRunning && shizukuInstalled) TextButton({ open(Intent(Intent.ACTION_VIEW, Uri.parse("https://shizuku.rikka.app/guide/setup/"))) }) { Text(stringResource(R.string.shizuku_guide)) }
+                                if (!shizukuRunning && shizukuInstalled) TextButton({ open(Intent(Intent.ACTION_VIEW, "https://shizuku.rikka.app/guide/setup/".toUri())) }) { Text(stringResource(R.string.shizuku_guide)) }
                             }
                         } }
                         item { SetupStep("3", R.string.step_detection, connected && detectionEnabled) {
@@ -356,7 +368,7 @@ class MainActivity : ComponentActivity() {
             },
             confirmButton = { TextButton({ showLicenses = false }) { Text(stringResource(R.string.done)) } })
         if (restrictedHelp) AlertDialog(onDismissRequest = { restrictedHelp = false }, title = { Text(stringResource(R.string.restricted_title)) },
-            text = { Text(stringResource(R.string.restricted_text)) }, confirmButton = { TextButton({ restrictedHelp = false; open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }) { Text(stringResource(R.string.open_app_info)) } },
+            text = { Text(stringResource(R.string.restricted_text)) }, confirmButton = { TextButton({ restrictedHelp = false; open(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, "package:$packageName".toUri())) }) { Text(stringResource(R.string.open_app_info)) } },
             dismissButton = { TextButton({ restrictedHelp = false }) { Text(stringResource(R.string.done)) } })
     }
     @Composable private fun SaveBar(unsaved: Int, onSave: () -> Unit) {

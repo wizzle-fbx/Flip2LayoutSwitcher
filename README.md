@@ -63,6 +63,8 @@ To publish a release:
 
 JDK 17+ and Android SDK platform 36. Set `sdk.dir` in an untracked `local.properties` or use `ANDROID_HOME`.
 
+GitHub Actions (`.github/workflows/build.yml`) validates the Gradle wrapper and runs `assembleDebug testDebugUnitTest lintDebug` on every push and pull request. Release APKs are built and signed locally.
+
 ```powershell
 .\gradlew.bat assembleDebug testDebugUnitTest lintDebug
 .\gradlew.bat assembleDebugAndroidTest

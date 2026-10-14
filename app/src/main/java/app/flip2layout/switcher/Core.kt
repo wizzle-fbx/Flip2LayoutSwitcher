@@ -10,7 +10,7 @@ enum class Mode(val label: String, val temp: Int, val flip: Int, val product: In
 
 data class PlannedSwitch(val packageName: String, val mode: Mode, val readyAt: Long)
 
-/** Monotonic clock; transient windows cancel pending work without restoring default. */
+/** Debounces foreground changes (monotonic clock): one pending switch, a write cooldown and no repeat for the same app. */
 class SwitchPlanner {
     var pending: PlannedSwitch? = null
         private set

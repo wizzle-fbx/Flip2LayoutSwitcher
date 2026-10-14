@@ -133,6 +133,22 @@ was installed from the Files app and set up only through its own Setup screen:
   *Check now*, Back returns to where Setup was opened, the button tester stops itself, screen-reader labels for
   Retro/Xbox buttons and switches, scrollable plain-text release notes.
 
+## Second full audit (manual, file by file)
+
+- Only a real settings write starts the switch cooldown; "already active" and "system preference kept" no longer
+  delay the next app's switch. Confirmed switches now carry `written = true`.
+- Update downloads are limited to this repository's `/releases/download/` path.
+- An installer confirmation that arrives while the app is in the background (Android blocks it there) is kept and
+  shown the next time the app is resumed.
+- The app list reloads on every return, so newly installed games appear without tapping Refresh; concurrent loads
+  are prevented.
+- A Shizuku probe that races a disconnect no longer logs "Control unavailable: null".
+- Adaptive launcher icon with a monochrome layer for Android 13 themed icons.
+- `targetSdk` 36 (Android 16 behaviour changes only apply on Android 16 devices; the UI is already edge-to-edge and
+  uses Compose back handling).
+- Lint cleanup (KTX helpers); remaining warnings are dependency-version notices and the fixed orientation.
+- GitHub Actions validates the Gradle wrapper and builds, tests and lints every push; `gradlew` is now executable.
+
 ## In-app updates
 
 Checks GitHub Releases (`updateRepo` in `gradle.properties`), downloads the APK, verifies package name and a higher

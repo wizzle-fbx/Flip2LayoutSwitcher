@@ -31,7 +31,7 @@ android {
     defaultConfig {
         applicationId = "app.flip2layout.switcher"
         minSdk = 33
-        targetSdk = 35
+        targetSdk = 36
         versionCode = versionCodeOf(appVersion)
         versionName = appVersion
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

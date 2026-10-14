@@ -99,7 +99,8 @@ class ControllerAccess(private val app: ProfilesApplication) {
         probing = true
         scope.launch {
             try {
-                val read = withContext(Dispatchers.IO) { runCatching { remote?.readState() }.getOrNull() }
+                val shell = remote ?: return@launch
+                val read = withContext(Dispatchers.IO) { runCatching { shell.readState() }.getOrNull() }
                 val ok = read != null && !read.startsWith("ERR:") && (parseMode(read) != null || repairable(read))
                 if (ok != _ready.value || !ok) app.report(if (ok) "Shizuku shell ready. Controller: ${_current.value?.label ?: "unknown"}" else "Control unavailable: $read")
                 _ready.value = ok
@@ -154,7 +155,7 @@ class ControllerAccess(private val app: ProfilesApplication) {
                     if (now - stableSince >= 600) {
                         val verified = withContext(Dispatchers.IO) { shell.readState() }
                         check(parseMode(verified) == mode && verified.substringAfterLast(',') == mode.flip.toString()) { "Firmware verification failed: $verified" }
-                        return@withLock SwitchResult(true, "${mode.label} confirmed; controller reconnected.")
+                        return@withLock SwitchResult(true, "${mode.label} confirmed; controller reconnected.", written = true)
                     }
                 } else stableSince = 0
                 delay(100)

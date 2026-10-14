@@ -103,7 +103,8 @@ class ForegroundService : AccessibilityService() {
             // Bookkeeping stays inside: withContext rethrows the caller's cancellation on return.
             withContext(NonCancellable) {
                 val result = app.applyProfile(profile, ::allowed)
-                if (result.confirmed) planner.switched(SystemClock.elapsedRealtime())
+                // Only a real write starts the cooldown; "already active" or "kept" results change nothing.
+                if (result.written) planner.switched(SystemClock.elapsedRealtime())
                 app.report("${plan.packageName} → ${plan.mode.label}: ${result.message}")
             }
         }
