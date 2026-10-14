@@ -1,11 +1,10 @@
 package app.flip2layout.switcher
 
-import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import androidx.core.content.FileProvider
 import androidx.core.content.edit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,13 +56,15 @@ object Versions {
 }
 
 /**
- * Checks this project's GitHub Releases and installs a newer APK through Android's package installer.
+ * Checks this project's GitHub Releases and opens a newer APK in Android's own install screen.
  * Android itself rejects an update signed with a different key, so only the maintainer's builds can install.
  */
 class Updater(private val app: ProfilesApplication) {
-    private companion object {
-        const val MAX_APK = 50L * 1024 * 1024
-        const val MAX_JSON = 512 * 1024
+    companion object {
+        private const val MAX_APK = 50L * 1024 * 1024
+        private const val MAX_JSON = 512 * 1024
+        /** Shared read-only with the install screen through the FileProvider (res/xml/update_paths.xml). */
+        fun updateFile(context: Context) = File(context.cacheDir, "updates/update.apk")
     }
     private val prefs = app.getSharedPreferences("updates", Context.MODE_PRIVATE)
     private val _available = MutableStateFlow<Release?>(null)
@@ -75,9 +76,9 @@ class Updater(private val app: ProfilesApplication) {
         get() = prefs.getBoolean("automatic", true)
         set(value) { prefs.edit { putBoolean("automatic", value) } }
 
-    /** The installer's confirmation screen, kept until an Activity can show it (Android blocks it from the background). */
+    /** The install screen, kept until an Activity can show it (Android blocks it from the background). */
     val pendingConfirmation = MutableStateFlow<Intent?>(null)
-    /** True while MainActivity is resumed, so the receiver knows whether it may start the confirmation directly. */
+    /** True while MainActivity is resumed, so the install screen may be started directly. */
     @Volatile var activityVisible = false
 
     /** A release found earlier survives process restarts so the 6-hour throttle cannot hide it. */
@@ -113,9 +114,14 @@ class Updater(private val app: ProfilesApplication) {
         return newer
     }
 
-    /** Downloads [release] and hands it to the system installer, which asks the user to confirm. */
+    /**
+     * Downloads [release] and opens it in Android's install screen, like opening the APK from Files.
+     * (An update through the app's own PackageInstaller session once dropped the app from Retroid's whitelist; installs
+     * through the install screen kept it.)
+     */
     suspend fun install(release: Release) {
-        val file = File(app.cacheDir, "update.apk")
+        val file = updateFile(app)
+        var handedOver = false
         try {
             progress.value = 0f
             withContext(Dispatchers.IO) {
@@ -131,6 +137,7 @@ class Updater(private val app: ProfilesApplication) {
                     check(conn.responseCode == 200) { "Download failed (${conn.responseCode})" }
                     val total = conn.contentLengthLong
                     check(total <= MAX_APK) { "Download too large" }
+                    file.parentFile?.mkdirs()
                     conn.inputStream.use { input -> file.outputStream().use { out ->
                         val buffer = ByteArray(64 * 1024); var done = 0L
                         while (true) {
@@ -145,43 +152,27 @@ class Updater(private val app: ProfilesApplication) {
                 val info = app.packageManager.getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(0))
                 check(info?.packageName == app.packageName) { "Downloaded file is not Flip2 Layout Switcher" }
                 check(info!!.longVersionCode > BuildConfig.VERSION_CODE) { "Downloaded build is not newer" }
-                val installer = app.packageManager.packageInstaller
-                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply { setAppPackageName(app.packageName) }
-                val id = installer.createSession(params)
-                try {
-                    installer.openSession(id).use { session ->
-                        session.openWrite("base.apk", 0, file.length()).use { out -> file.inputStream().use { it.copyTo(out) }; session.fsync(out) }
-                        val callback = PendingIntent.getBroadcast(app, id, Intent(app, UpdateReceiver::class.java),
-                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                        session.commit(callback.intentSender)
-                    }
-                } catch (e: Exception) {
-                    // Do not leave a staged copy behind in the system installer.
-                    runCatching { installer.abandonSession(id) }
-                    throw e
-                }
             }
-            app.report("Update ${release.version} handed to the installer.")
+            val uri = FileProvider.getUriForFile(app, "${app.packageName}.updates", file)
+            val confirm = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            // From the background Android silently blocks this; MainActivity shows it on its next resume instead.
+            if (activityVisible) app.startActivity(confirm) else pendingConfirmation.value = confirm
+            handedOver = true
+            app.report("Update ${release.version} opened in the installer.")
         } finally {
             progress.value = null
-            file.delete()
+            // The install screen reads the file after this returns; it is removed once the update is installed.
+            if (!handedOver) file.delete()
         }
     }
 }
 
-/** Receives the installer status; the system's confirmation screen is started from here. */
+/** Runs in the new version after an update: reports it and removes the downloaded APK. */
 class UpdateReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val app = context.applicationContext as ProfilesApplication
-        when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                val confirm = intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                // From the background Android silently blocks this; MainActivity shows it on its next resume instead.
-                if (confirm != null && app.updater.activityVisible) context.startActivity(confirm)
-                else app.updater.pendingConfirmation.value = confirm
-            }
-            PackageInstaller.STATUS_SUCCESS -> app.report("Update installed.")
-            else -> app.report("Update not installed ($status): ${intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)}")
-        }
+        if (intent.action != Intent.ACTION_MY_PACKAGE_REPLACED) return
+        Updater.updateFile(context).delete()
+        (context.applicationContext as ProfilesApplication).report("Update installed (${BuildConfig.VERSION_NAME}).")
     }
 }

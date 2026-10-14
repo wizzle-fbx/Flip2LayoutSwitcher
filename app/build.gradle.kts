@@ -9,7 +9,7 @@ fun keystoreValue(key: String): String = keystore?.getProperty(key)?.takeIf { it
 
 // Bump only this. versionCode is derived from it so the in-app updater (which compares names) and Android
 // (which requires a higher versionCode) always agree: MAJOR.MINOR.PATCH[-alpha|-beta|-rc[.N]].
-val appVersion = "0.3.2"
+val appVersion = "0.3.3"
 fun versionCodeOf(version: String): Int {
     val (major, minor, patch) = version.substringBefore('-').split('.').map { it.toInt() }
     val pre = version.substringAfter('-', "")
