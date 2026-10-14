@@ -36,7 +36,7 @@ adb -s YOUR_SERIAL shell am instrument -w -e class app.flip2layout.switcher.Prof
 
 1. Bump `appVersion` in `app/build.gradle.kts` (`MAJOR.MINOR.PATCH[-alpha|-beta|-rc[.N]]`); `versionCode` is derived from it.
 2. `.\gradlew.bat assembleRelease testDebugUnitTest lintRelease` with `keystore.properties` present.
-3. Create a GitHub release tagged with the version (e.g. `v0.4.0-beta`) and attach `Flip2LayoutSwitcher-<version>-release.apk`. The in-app updater uses the first `.apk` of the newest non-draft release and shows the release notes in its dialog.
+3. Create a GitHub release tagged with the version (e.g. `v0.4.0-beta`) and attach `app/build/dist/Flip2LayoutSwitcher-<version>.apk` (a copy of the signed release APK without the build-type suffix). Leave "pre-release" unticked. The in-app updater uses the first `.apk` of the newest non-draft release and shows the release notes in its dialog.
 
 The updater checks this repository's releases at most every 6 hours, downloads only from `github.com/<repo>/releases/download/`, checks the package name and a higher versionCode, and hands the APK to Android's package installer. Debug builds never check.
 

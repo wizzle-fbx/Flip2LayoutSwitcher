@@ -55,6 +55,14 @@ android {
 }
 // APKs are named Flip2LayoutSwitcher-<version>-<buildType>.apk.
 base { archivesName = "Flip2LayoutSwitcher-${android.defaultConfig.versionName}" }
+// The GitHub release asset: build/dist/Flip2LayoutSwitcher-<version>.apk, without the build-type suffix.
+val releaseAssetName = "Flip2LayoutSwitcher-$appVersion.apk"
+val releaseAsset by tasks.registering(Copy::class) {
+    from(layout.buildDirectory.dir("outputs/apk/release")) { include("*-release.apk") }
+    into(layout.buildDirectory.dir("dist"))
+    rename { releaseAssetName }
+}
+tasks.matching { it.name == "assembleRelease" }.configureEach { finalizedBy(releaseAsset) }
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.06.00"))
