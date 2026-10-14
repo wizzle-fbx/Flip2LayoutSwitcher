@@ -309,7 +309,7 @@ class MainActivity : ComponentActivity() {
                             Switch(autoUpdate, { autoUpdate = it; app.updater.automatic = it }, Modifier.semantics { contentDescription = label })
                         } }
                         item { Text(stringResource(R.string.about), style = MaterialTheme.typography.titleSmall); Text(stringResource(R.string.about_text), style = MaterialTheme.typography.bodySmall)
-                            Text("${BuildConfig.VERSION_NAME} · ${android.os.Build.MODEL}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.version_line, BuildConfig.VERSION_NAME, android.os.Build.MODEL), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Row {
                                 TextButton({ page = "diagnostics" }) { Text(stringResource(R.string.technical_details)) }
                                 TextButton({ showLicenses = true }) { Text(stringResource(R.string.licenses)) }

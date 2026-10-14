@@ -51,7 +51,7 @@ Installed apps, profiles and recent diagnostic events stay on the device (releas
 
 Releases are distributed as a signed APK on GitHub Releases (not Google Play: Play restricts AccessibilityService and QUERY_ALL_PACKAGES use, and the app depends on Shizuku and one device's firmware).
 
-When the app opens it checks this repository's GitHub Releases (at most every 6 hours; *Settings → Check for updates* turns it off, *Check now* forces it). If a newer version exists, a dialog offers **Update**: the APK is downloaded, checked to be a newer build of `app.flip2layout.switcher`, and handed to Android's package installer, which asks for confirmation (and, the first time, permission to install from Flip2 Layout Switcher). Android refuses an update signed with a different key. Debug builds and builds without a configured repository never check.
+When the app opens it checks this repository's GitHub Releases (at most every 6 hours; *Settings → Check for updates* turns it off, *Check now* forces it). If a newer version exists, a dialog offers **Update**: the APK is downloaded, checked to be a newer build of `app.flip2layout.switcher`, and handed to Android's package installer, which asks for confirmation (and, the first time, permission to install from Flip2 Layout Switcher). Android refuses an update signed with a different key. Release APKs are signed with the certificate whose SHA-256 is `11082b7a7043adc5bfe26841d634551724129e41d48d6b68c1624b157a78002c` (check with `apksigner verify --print-certs <apk>`). Debug builds and builds without a configured repository never check.
 
 To publish a release:
 

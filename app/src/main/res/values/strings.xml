@@ -65,6 +65,7 @@
     <string name="not_saved">Not saved</string>
     <string name="mode_for_app">%1$s for %2$s</string>
     <string name="about">About</string>
+    <string name="version_line">Version %1$s · %2$s</string>
     <string name="about_text">Open-source controller profiles for Retroid Pocket Flip 2. Uses the existing Retroid controller setting. No virtual controller, ads or data collection.</string>
     <string name="supported_firmware">Supported firmware</string>
     <string name="privacy">Privacy</string>
