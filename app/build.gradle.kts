@@ -1,6 +1,6 @@
 import java.util.Properties
 
-// Release signing comes from an untracked keystore.properties (see README); without it the release APK is unsigned.
+// Release signing comes from an untracked keystore.properties (see docs/DEVELOPMENT.md); without it the release APK is unsigned.
 val keystore = rootProject.file("keystore.properties").takeIf { it.exists() }?.let { file ->
     Properties().apply { file.inputStream().use { load(it) } }
 }
